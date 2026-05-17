@@ -1,1 +1,15 @@
-import requests import csv import os import json import time import threading from datetime import datetime, timezone # ── CONFIG ────────────────────────────────────────────── TOMORROW_API_KEY = "p2JMu0blVvwGhae9BNTX6A2acUFRoUCi" OPENWEATHER_KEY = "2d1986adb664b8bf755e2bb49bb5636d" GROQ_API_KEY = "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" TELEGRAM_TOKEN = "8232521107:AAEPmqb846XRHt7rZSsXFi-vuPcAcaz8Ogs" CHAT_ID = "6637699767" LOG_FILE = "signals_v4.csv" STATS_FILE = "stats_v4.json" MIN_SCORE = 60 CITIES = [ {"name": "London", "lat": 51.5074, "lon": -0.1278}, {"name": "Tokyo", "lat": 35.6762, "lon": 139.6503}, {"name": "Paris", "lat": 48.8566, "lon": 2.3522}, {"name": "Toronto", "lat": 43.6510, "lon": -79.3470}, {"name": "Sao Paulo", "lat": -23.5505, "lon": -46.6333}, {"name": "Seoul", "lat": 37.5665, "lon": 126.9780}, {"name": "Shanghai", "lat": 31.2304, "lon": 121.4737}, {"name": "Wellington", "lat": -41.2866, "lon": 174.7756}, {"name": "Buenos Aires", "lat": -34.6037, "lon": -58.3816}, {"name": "Hong Kong", "lat": 22.3193, "lon": 114.1694}, {"name": "New York", "lat": 40.7128, "lon": -74.0060}, {"name": "Berlin", "lat": 52.5200, "lon": 13.4050}, {"name": "Madrid", "lat": 40.4168, "lon": -3.7038}, {"name": "Sydney", "lat": -33.8688, "lon": 151.2093}, {"name": "Singapore", "lat": 1.3521, "lon": 103.8198}, ] POLYMARKET_ODDS = { "London": {19: 31, 18: 27}, "Tokyo": {19: 95, 20: 7}, "Paris": {23: 37, 22: 24}, "Toronto": {2: 42, 1: 37
+import requests, time
+from datetime import datetime, timezone
+
+TELEGRAM_TOKEN = "8232521107:AAEPmqb846XRHt7rZSsXFi-vuPcAcaz8Ogs"
+CHAT_ID = "6637699767"
+
+def send(msg):
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+    data={"chat_id": CHAT_ID, "text": msg}, timeout=30)
+
+send("ALIEN PROTOCOL ONLINE — First scan running...")
+
+while True:
+    send(f"Alive at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    time.sleep(3600)
