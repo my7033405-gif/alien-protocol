@@ -95,7 +95,13 @@ def fetch_live_markets():
     try:
         # Fetch active markets
         url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=200"
-        r = requests.get(url, timeout=30)
+headers = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36",
+    "Accept": "application/json",
+    "Origin": "https://polymarket.com",
+    "Referer": "https://polymarket.com/"
+}
+r = requests.get(url, headers=headers, timeout=30)
         all_markets = r.json()
 
         for market in all_markets:
