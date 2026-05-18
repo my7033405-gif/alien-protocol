@@ -4,7 +4,6 @@ import os
 import json
 import time
 import threading
-import re
 from datetime import datetime, timezone
 
 # ── CONFIG ──────────────────────────────────────────────
@@ -13,9 +12,9 @@ OPENWEATHER_KEY  = "2d1986adb664b8bf755e2bb49bb5636d"
 GROQ_API_KEY     = "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"
 TELEGRAM_TOKEN   = "8232521107:AAEPmqb846XRHt7rZSsXFi-vuPcAcaz8Ogs"
 CHAT_ID          = "6637699767"
-LOG_FILE         = "signals_v5.csv"
-STATS_FILE       = "stats_v5.json"
-MIN_SCORE        = 55
+LOG_FILE         = "signals_v6.csv"
+STATS_FILE       = "stats_v6.json"
+MIN_SCORE        = 60
 
 CITIES = [
     {"name": "London",       "lat": 51.5074,  "lon": -0.1278},
@@ -35,111 +34,97 @@ CITIES = [
     {"name": "Singapore",    "lat":  1.3521,  "lon": 103.8198},
 ]
 
-# ── POLYMARKET AUTO-FETCH ────────────────────────────────
+# ── POLYMARKET LIVE ODDS ─────────────────────────────────
+# Market type is HIGHEST temperature — always verify on site
 
 def fetch_polymarket_odds():
-    """
-    Auto-fetch today's weather temperature odds from Polymarket Gamma API.
-    Returns dict: {city_name: {temp_c: probability_%}}
-    """
-    print("Fetching Polymarket odds...")
-    odds = {}
+    print("  Fetching live Polymarket odds...")
     try:
-        url = "https://gamma-api.polymarket.com/markets"
-        params = {
-            "tag": "temperature",
-            "active": "true",
-            "closed": "false",
-            "limit": 100
-        }
-        r = requests.get(url, params=params, timeout=30)
+        today = datetime.now(timezone.utc)
+        date_str = today.strftime("%B %-d")  # e.g. "May 18"
+        url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=200"
+        r = requests.get(url, timeout=30)
         markets = r.json()
 
-        today = datetime.now(timezone.utc).strftime("%B %-d")
-        today_alt = datetime.now(timezone.utc).strftime("%b %-d")
-
-        city_names = [c["name"] for c in CITIES]
+        odds = {}
+        city_keywords = {
+            "London": "london", "Tokyo": "tokyo", "Paris": "paris",
+            "Toronto": "toronto", "Sao Paulo": "paulo", "Seoul": "seoul",
+            "Shanghai": "shanghai", "Wellington": "wellington",
+            "Buenos Aires": "buenos", "Hong Kong": "hong kong",
+            "New York": "new york", "Berlin": "berlin",
+            "Madrid": "madrid", "Sydney": "sydney", "Singapore": "singapore",
+        }
 
         for market in markets:
-            question = market.get("question", "")
-            outcomes = market.get("outcomes", "[]")
-            prices = market.get("outcomePrices", "[]")
-
-            # Parse JSON strings if needed
-            if isinstance(outcomes, str):
-                try:
-                    outcomes = json.loads(outcomes)
-                except:
-                    continue
-            if isinstance(prices, str):
-                try:
-                    prices = json.loads(prices)
-                except:
-                    continue
-
-            # Match city name in question
-            matched_city = None
-            for city in city_names:
-                if city.lower() in question.lower():
-                    matched_city = city
-                    break
-            if not matched_city:
+            title = market.get("question", "").lower()
+            # Only target HIGHEST temperature markets
+            if "highest" not in title:
                 continue
 
-            # Only today's markets
-            if today.lower() not in question.lower() and today_alt.lower() not in question.lower():
-                continue
-
-            # Extract temperature and probability from outcomes
-            city_odds = {}
-            for i, outcome in enumerate(outcomes):
-                if i >= len(prices):
-                    break
-                try:
-                    # Extract temperature number from outcome string
-                    temp_match = re.search(r'(-?\d+)', str(outcome))
-                    if temp_match:
-                        temp = int(temp_match.group(1))
-                        prob = round(float(prices[i]) * 100)
-                        if 1 <= prob <= 99:
-                            city_odds[temp] = prob
-                except:
+            for city, keyword in city_keywords.items():
+                if keyword not in title:
                     continue
+                try:
+                    import re
+                    outcomes = market.get("outcomes", "[]")
+                    prices = market.get("outcomePrices", "[]")
+                    if isinstance(outcomes, str):
+                        outcomes = json.loads(outcomes)
+                    if isinstance(prices, str):
+                        prices = json.loads(prices)
 
-            if city_odds:
-                if matched_city not in odds:
-                    odds[matched_city] = {}
-                odds[matched_city].update(city_odds)
-                print(f"  Fetched {matched_city}: {city_odds}")
+                    if city not in odds:
+                        odds[city] = {}
+
+                    for i, outcome in enumerate(outcomes):
+                        temp_match = re.search(r'(-?\d+)', str(outcome))
+                        if temp_match and i < len(prices):
+                            temp = int(temp_match.group(1))
+                            prob = round(float(prices[i]) * 100, 1)
+                            if prob > 1:  # ignore dust markets
+                                odds[city][temp] = prob
+                except Exception as e:
+                    print(f"    Parse error {city}: {e}")
+                break
+
+        if odds:
+            print(f"  Got live odds for {len(odds)} cities")
+            return odds
+        else:
+            print("  No live odds found — using fallback")
+            return None
 
     except Exception as e:
-        print(f"Polymarket fetch error: {e}")
+        print(f"  Polymarket error: {e}")
+        return None
 
-    if odds:
-        print(f"Auto-fetched odds for {len(odds)} cities.")
-    else:
-        print("No odds fetched — using fallback odds.")
-
-    return odds
-
-# Fallback odds if API fetch fails
 FALLBACK_ODDS = {
     "London":       {19: 31, 18: 27},
-    "Tokyo":        {19: 95, 20: 7},
+    "Tokyo":        {21: 45, 22: 30},
     "Paris":        {23: 37, 22: 24},
-    "Toronto":      {2: 42,  1: 37},
+    "Toronto":      {18: 40, 19: 25},
     "Sao Paulo":    {29: 45, 28: 35},
-    "Seoul":        {12: 37, 13: 24},
-    "Shanghai":     {17: 38, 18: 29},
-    "Wellington":   {20: 97},
-    "Buenos Aires": {18: 90, 19: 6},
-    "Hong Kong":    {28: 99, 27: 1},
-    "New York":     {10: 50, 11: 30},
-    "Berlin":       {16: 44, 15: 30},
-    "Madrid":       {22: 88, 23: 15},
-    "Sydney":       {24: 35, 25: 20},
+    "Seoul":        {24: 37, 25: 24},
+    "Shanghai":     {28: 38, 29: 29},
+    "Wellington":   {14: 60, 15: 25},
+    "Buenos Aires": {18: 50, 19: 30},
+    "Hong Kong":    {30: 45, 31: 30},
+    "New York":     {28: 40, 29: 30},
+    "Berlin":       {20: 44, 21: 30},
+    "Madrid":       {26: 45, 27: 30},
+    "Sydney":       {20: 45, 21: 30},
     "Singapore":    {33: 50, 34: 30},
 }
+
+# ── POLYMARKET SEARCH LINK ───────────────────────────────
+
+def polymarket_link(city):
+    today = datetime.now(timezone.utc)
+    month = today.strftime("%B").lower()
+    day = today.day
+    city_slug = city.lower().replace(" ", "-")
+    return f"https://polymarket.com/event/highest-temperature-in-{city_slug}-on-{month}-{day}"
 
 # ── WEATHER APIS ─────────────────────────────────────────
 
@@ -202,38 +187,35 @@ def get_best_temp(city):
     if not results:
         return None, "no data", "NONE"
     temps = list(results.values())
-    avg_temp = round(sum(temps) / len(temps), 1)
-    sources = "+".join(results.keys())
+    avg = round(sum(temps) / len(temps), 1)
+    sources = " + ".join(results.keys())
     if len(temps) == 1:
-        confidence = "SINGLE"
+        conf = "SINGLE"
     else:
         spread = max(temps) - min(temps)
-        if spread <= 1.0:   confidence = "HIGH"
-        elif spread <= 2.0: confidence = "MEDIUM"
-        else:               confidence = "LOW"
-    return avg_temp, sources, confidence
+        if spread <= 1.0:   conf = "HIGH"
+        elif spread <= 2.0: conf = "MEDIUM"
+        else:               conf = "LOW"
+    return avg, sources, conf
 
-# ── GROQ AI BRAIN ────────────────────────────────────────
+# ── GROQ AI ──────────────────────────────────────────────
 
 def ai_verdict(city, real_temp, market_temp, probability, gap, score, data_conf, hour_utc):
-    prompt = f"""You are an expert prediction market trader on Polymarket specializing in weather markets.
-
-Signal to analyze:
-- City: {city}
-- Real temperature NOW: {real_temp}C
-- Market expects: {market_temp}C at {probability}% probability  
-- Gap: {gap:+.1f}C (real vs market)
-- Confidence score: {score}/100
-- Data confidence: {data_conf} (multi-source agreement)
-- Time: {hour_utc}:00 UTC
-
-Give me:
-1. Should I bet YES on {market_temp}C resolving? 
-2. Biggest risk to this trade?
-3. Verdict: STRONG BET / BET / PASS / AVOID
-
-Max 3 sentences. Be brutally direct."""
-
+    prompt = (
+        f"You are a Polymarket weather trading expert.\n\n"
+        f"Signal:\n"
+        f"- City: {city}\n"
+        f"- Real max temp today: {real_temp}C\n"
+        f"- Market: Highest temp = {market_temp}C at {probability}% probability\n"
+        f"- Gap: {gap:+.1f}C above market expectation\n"
+        f"- Score: {score}/100\n"
+        f"- Data confidence: {data_conf}\n"
+        f"- UTC hour: {hour_utc}:00\n\n"
+        f"Answer in exactly 3 lines:\n"
+        f"1. Should I bet YES on {market_temp}C resolving? Why?\n"
+        f"2. Biggest risk?\n"
+        f"3. Final verdict: STRONG BET / BET / PASS / AVOID"
+    )
     try:
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -249,9 +231,10 @@ Max 3 sentences. Be brutally direct."""
             },
             timeout=30
         )
-        return r.json()["choices"][0]["message"]["content"].strip()
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        return f"AI unavailable: {e}"
+        return f"AI error: {e}"
 
 # ── STATS ────────────────────────────────────────────────
 
@@ -259,8 +242,8 @@ def load_stats():
     if os.path.exists(STATS_FILE):
         with open(STATS_FILE, "r") as f:
             return json.load(f)
-    return {"total_signals": 0, "total_bets": 0, "wins": 0,
-            "losses": 0, "daily_log": {}}
+    return {"wins": 0, "losses": 0, "total_bets": 0,
+            "total_signals": 0, "daily_log": {}}
 
 def save_stats(stats):
     with open(STATS_FILE, "w") as f:
@@ -284,15 +267,65 @@ def confidence_score(gap, probability, hour_utc, data_conf):
     elif probability <= 35: score += 18
     elif probability <= 45: score += 12
     elif probability <= 55: score += 6
-    if 4 <= hour_utc <= 8:     score += 20
-    elif 9 <= hour_utc <= 12:  score += 16
-    elif 13 <= hour_utc <= 16: score += 10
-    elif 17 <= hour_utc <= 20: score += 5
-    else:                      score += 2
-    if data_conf == "HIGH":    score += 15
+    if 4 <= hour_utc <= 8:      score += 20
+    elif 9 <= hour_utc <= 12:   score += 16
+    elif 13 <= hour_utc <= 16:  score += 10
+    elif 17 <= hour_utc <= 20:  score += 5
+    else:                       score += 2
+    if data_conf == "HIGH":     score += 15
     elif data_conf == "MEDIUM": score += 8
     elif data_conf == "SINGLE": score += 5
     return min(score, 100)
+
+# ── SIGNAL BUILDER ───────────────────────────────────────
+
+def build_signals(city_name, real_temp, odds, hour_utc, sources, data_conf):
+    signals = []
+    for market_temp, probability in odds.items():
+        gap = real_temp - market_temp
+        score = confidence_score(gap, probability, hour_utc, data_conf)
+        if gap >= 2 and probability < 40:
+            rating = "BET"
+        elif gap >= 1 and probability < 50:
+            rating = "WATCH"
+        else:
+            rating = "SKIP"
+        signals.append({
+            "city": city_name,
+            "real_temp": real_temp,
+            "market_temp": market_temp,
+            "market_prob": probability,
+            "gap": gap,
+            "score": score,
+            "rating": rating,
+            "sources": sources,
+            "data_conf": data_conf,
+        })
+    return signals
+
+# ── BET CARD ─────────────────────────────────────────────
+
+def build_bet_card(s, verdict, rank):
+    payout = round(1 / (s["market_prob"] / 100), 2)
+    return (
+        f"BET #{rank} — {s['city'].upper()}\n"
+        f"─────────────────────\n"
+        f"Market: Highest temp = {s['market_temp']}C\n"
+        f"Market says: {s['market_prob']}% chance\n"
+        f"Real temp now: {s['real_temp']}C\n"
+        f"Gap: {s['gap']:+.1f}C above expectation\n"
+        f"Score: {s['score']}/100\n"
+        f"Data: {s['sources']}\n"
+        f"Confidence: {s['data_conf']}\n"
+        f"Payout if win: ${payout} per $1 bet\n"
+        f"─────────────────────\n"
+        f"AI VERDICT:\n{verdict}\n"
+        f"─────────────────────\n"
+        f"WHERE TO BET:\n"
+        f"polymarket.com → Weather → Temperature\n"
+        f"Search: 'Highest temperature {s['city']}'\n"
+        f"Click YES on {s['market_temp']}C"
+    )
 
 # ── CSV LOGGER ───────────────────────────────────────────
 
@@ -306,7 +339,7 @@ def log_to_csv(signals):
         if not file_exists:
             writer.writeheader()
         for s in signals:
-            row = {k: v for k, v in s.items() if k in writer.fieldnames}
+            row = dict(s)
             row["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
             writer.writerow(row)
 
@@ -335,14 +368,11 @@ def get_updates(offset=None):
 def run_scan(silent=False):
     now = datetime.now(timezone.utc)
     hour_utc = now.hour
-    print(f"\n[{now.strftime('%H:%M UTC')}] ALIEN PROTOCOL v5 scanning...")
+    print(f"\n[{now.strftime('%H:%M UTC')}] Scanning {len(CITIES)} cities...")
 
-    # Auto-fetch Polymarket odds
     live_odds = fetch_polymarket_odds()
-    odds_source = "LIVE Polymarket API"
-    if not live_odds:
-        live_odds = FALLBACK_ODDS
-        odds_source = "FALLBACK (manual)"
+    polymarket_odds = live_odds if live_odds else FALLBACK_ODDS
+    odds_source = "LIVE Polymarket" if live_odds else "FALLBACK"
 
     all_signals = []
     top_bets = []
@@ -355,39 +385,21 @@ def run_scan(silent=False):
             if temp is None:
                 print(f"  NO DATA   {city['name']}")
                 continue
-            odds = live_odds.get(city["name"], {})
+            odds = polymarket_odds.get(city["name"], {})
             if not odds:
                 continue
-            for market_temp, probability in odds.items():
-                gap = round(temp - market_temp, 1)
-                score = confidence_score(gap, probability, hour_utc, data_conf)
-                if gap >= 2 and probability < 40:
-                    rating = "BET"
-                elif gap >= 1 and probability < 50:
-                    rating = "WATCH"
-                else:
-                    rating = "SKIP"
-                s = {
-                    "city": city["name"],
-                    "real_temp": temp,
-                    "market_temp": market_temp,
-                    "market_prob": probability,
-                    "gap": gap,
-                    "score": score,
-                    "rating": rating,
-                    "sources": sources,
-                    "data_conf": data_conf,
-                }
-                all_signals.append(s)
-                tag = (f"[{score}] {city['name']}: "
-                       f"Real {temp}C vs {market_temp}C "
-                       f"@ {probability}% | Gap {gap:+.1f} [{data_conf}]")
-                if rating == "BET" and score >= MIN_SCORE:
-                    top_bets.append((score, tag, s))
+            signals = build_signals(city["name"], temp, odds, hour_utc, sources, data_conf)
+            all_signals.extend(signals)
+            for s in signals:
+                tag = (f"[{s['score']}] {city['name']}: "
+                       f"Real {temp}C vs {s['market_temp']}C "
+                       f"@ {s['market_prob']}% | Gap {s['gap']:+.1f} [{data_conf}]")
+                if s["rating"] == "BET" and s["score"] >= MIN_SCORE:
+                    top_bets.append((s["score"], tag, s))
                     print(f"  GREEN  {tag}")
-                elif rating == "WATCH" and score >= MIN_SCORE - 10:
-                    watches.append((score, tag, s))
-                    print(f"  YELLOW {tag}")
+                elif s["rating"] == "WATCH" and s["score"] >= MIN_SCORE - 10:
+                    watches.append((s["score"], tag, s))
+                    print(f"  WATCH  {tag}")
                 else:
                     print(f"  SKIP   {tag}")
         except Exception as e:
@@ -410,46 +422,41 @@ def run_scan(silent=False):
     if silent:
         return top_bets, watches
 
+    # Summary report
     lines = [
-        "ALIEN PROTOCOL v5",
+        "ALIEN PROTOCOL v6",
         f"{now.strftime('%Y-%m-%d %H:%M UTC')}",
-        f"Odds: {odds_source}",
-        f"Win Rate: {win_rate(stats)}% ({stats['wins']}W/{stats['losses']}L)",
+        f"Odds source: {odds_source}",
+        f"Win Rate: {win_rate(stats)}% ({stats['wins']}W / {stats['losses']}L)",
         "─────────────────────",
     ]
     if top_bets:
-        lines.append(f"GREEN BETS ({len(top_bets)}):")
+        lines.append(f"TOP BETS TODAY ({len(top_bets)}):")
         for score, tag, _ in top_bets[:5]:
             lines.append(f"  {tag}")
     if watches:
-        lines.append(f"YELLOW WATCHES ({len(watches)}):")
+        lines.append(f"WATCHING ({len(watches)}):")
         for score, tag, _ in watches[:3]:
             lines.append(f"  {tag}")
     if not top_bets and not watches:
         lines.append("No strong signals. Market well-priced today.")
     lines.append("─────────────────────")
-    lines.append(f"Cities: {len(CITIES)} | Signals: {len(all_signals)}")
+    lines.append(f"Cities: {len(CITIES)} | Total signals: {len(all_signals)}")
+    lines.append("Send /bets for full bet cards with AI verdicts")
     send_telegram("\n".join(lines))
 
-    # AI verdict on top signal
+    # Auto send top 3 bet cards
     if top_bets:
-        _, _, best = top_bets[0]
-        verdict = ai_verdict(
-            best["city"], best["real_temp"], best["market_temp"],
-            best["market_prob"], best["gap"], best["score"],
-            best["data_conf"], hour_utc
-        )
-        send_telegram(
-            f"AI VERDICT — TOP SIGNAL\n"
-            f"─────────────────────\n"
-            f"{best['city']} YES {best['market_temp']}C @ {best['market_prob']}%\n"
-            f"Score: {best['score']}/100 | {best['data_conf']}\n"
-            f"Gap: {best['gap']:+.1f}C\n"
-            f"─────────────────────\n"
-            f"{verdict}\n"
-            f"─────────────────────\n"
-            f"Go to polymarket.com → Weather → {best['city']}"
-        )
+        send_telegram("Generating bet cards...")
+        for i, (score, tag, s) in enumerate(top_bets[:3], 1):
+            verdict = ai_verdict(
+                s["city"], s["real_temp"], s["market_temp"],
+                s["market_prob"], s["gap"], s["score"],
+                s["data_conf"], hour_utc
+            )
+            card = build_bet_card(s, verdict, i)
+            send_telegram(card)
+            time.sleep(1)
 
     print("Scan complete.")
     return top_bets, watches
@@ -461,30 +468,21 @@ def morning_briefing():
     top_bets, _ = run_scan(silent=True)
     stats = load_stats()
     lines = [
-        "GOOD MORNING — ALIEN PROTOCOL v5",
+        "GOOD MORNING — ALIEN PROTOCOL v6",
         now.strftime("%A, %B %d"),
-        f"Win Rate: {win_rate(stats)}% ({stats['wins']}W/{stats['losses']}L)",
+        f"Win Rate: {win_rate(stats)}% ({stats['wins']}W / {stats['losses']}L)",
         "─────────────────────",
     ]
     if top_bets:
-        lines.append(f"TOP {min(3, len(top_bets))} SIGNALS:")
-        for score, tag, _ in top_bets[:3]:
+        lines.append(f"TOP SIGNALS TODAY ({len(top_bets)}):")
+        for score, tag, _ in top_bets[:5]:
             lines.append(f"  {tag}")
-        _, _, best = top_bets[0]
-        verdict = ai_verdict(
-            best["city"], best["real_temp"], best["market_temp"],
-            best["market_prob"], best["gap"], best["score"],
-            best["data_conf"], now.hour
-        )
         lines.append("─────────────────────")
-        lines.append("AI on best signal:")
-        lines.append(verdict)
-        lines.append("─────────────────────")
-        lines.append(f"Bet link: polymarket.com → Weather → {best['city']}")
+        lines.append("Send /bets for full details + AI verdicts on each.")
+        lines.append("Bet $1 each on scores 70+. Max 3 bets.")
     else:
-        lines.append("No strong signals today. Skip — protect the bankroll.")
+        lines.append("No strong signals today. Sit on your hands.")
     send_telegram("\n".join(lines))
-    print("Morning briefing sent.")
 
 # ── EVENING RESULTS ──────────────────────────────────────
 
@@ -493,7 +491,7 @@ def evening_results():
     today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     today = stats["daily_log"].get(today_key, {"bets": []})
     lines = [
-        "EVENING RESULTS — ALIEN PROTOCOL v5",
+        "EVENING RESULTS — ALIEN PROTOCOL v6",
         today_key,
         "─────────────────────",
         "Check polymarket.com for today's outcomes.",
@@ -501,22 +499,24 @@ def evening_results():
         "─────────────────────",
     ]
     if today["bets"]:
-        for b in today["bets"]:
+        for i, b in enumerate(today["bets"], 1):
+            payout = round(1 / (b["market_prob"] / 100), 2)
             lines.append(
-                f"  {b['city']} {b['market_temp']}C "
-                f"@ {b['market_prob']}% | Score {b['score']}"
+                f"Bet #{i}: {b['city']} {b['market_temp']}C "
+                f"@ {b['market_prob']}% | "
+                f"Payout: ${payout}/$1"
             )
     else:
         lines.append("No bets today.")
     lines.append("─────────────────────")
-    lines.append(f"Record: {win_rate(stats)}% ({stats['wins']}W/{stats['losses']}L)")
+    lines.append(f"Overall: {win_rate(stats)}% ({stats['wins']}W / {stats['losses']}L)")
     send_telegram("\n".join(lines))
 
 # ── COMMAND HANDLER ──────────────────────────────────────
 
 def handle_commands():
     offset = None
-    print("Commands active: /scan /stats /top /win /loss /help")
+    print("Command listener active...")
     while True:
         try:
             updates = get_updates(offset)
@@ -527,24 +527,45 @@ def handle_commands():
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 if chat_id != CHAT_ID:
                     continue
+
                 if text == "/scan":
-                    send_telegram("Scanning + fetching live Polymarket odds...")
+                    send_telegram("Scanning 15 cities + fetching live odds...")
                     run_scan()
+
+                elif text == "/bets":
+                    top_bets, _ = run_scan(silent=True)
+                    if top_bets:
+                        now_hour = datetime.now(timezone.utc).hour
+                        send_telegram(f"Generating {min(3, len(top_bets))} bet cards...")
+                        for i, (score, tag, s) in enumerate(top_bets[:3], 1):
+                            verdict = ai_verdict(
+                                s["city"], s["real_temp"], s["market_temp"],
+                                s["market_prob"], s["gap"], s["score"],
+                                s["data_conf"], now_hour
+                            )
+                            card = build_bet_card(s, verdict, i)
+                            send_telegram(card)
+                            time.sleep(1)
+                    else:
+                        send_telegram("No strong signals right now. Check back later.")
+
                 elif text == "/stats":
                     stats = load_stats()
                     send_telegram(
-                        f"ALIEN PROTOCOL v5 STATS\n"
+                        f"ALIEN PROTOCOL v6 STATS\n"
                         f"─────────────────────\n"
                         f"Win Rate:      {win_rate(stats)}%\n"
                         f"Wins:          {stats['wins']}\n"
                         f"Losses:        {stats['losses']}\n"
                         f"Total Bets:    {stats['total_bets']}\n"
                         f"Total Signals: {stats['total_signals']}\n"
-                        f"Stack: Open-Meteo+Tomorrow.io+Groq AI\n"
+                        f"─────────────────────\n"
+                        f"Weather: Open-Meteo + Tomorrow.io\n"
+                        f"Brain: Groq Llama 3 70B\n"
                         f"Odds: Live Polymarket API"
                     )
+
                 elif text == "/top":
-                    send_telegram("Finding top signal...")
                     top_bets, _ = run_scan(silent=True)
                     if top_bets:
                         _, _, best = top_bets[0]
@@ -553,50 +574,46 @@ def handle_commands():
                             best["market_prob"], best["gap"], best["score"],
                             best["data_conf"], datetime.now(timezone.utc).hour
                         )
-                        send_telegram(
-                            f"TOP SIGNAL + AI VERDICT\n"
-                            f"─────────────────────\n"
-                            f"{best['city']} YES {best['market_temp']}C "
-                            f"@ {best['market_prob']}%\n"
-                            f"Score: {best['score']}/100 | Gap: {best['gap']:+.1f}C\n"
-                            f"─────────────────────\n"
-                            f"{verdict}\n"
-                            f"─────────────────────\n"
-                            f"polymarket.com → Weather → {best['city']}"
-                        )
+                        send_telegram(build_bet_card(best, verdict, 1))
                     else:
-                        send_telegram("No strong signals right now. Wait.")
+                        send_telegram("No strong signals right now.")
+
                 elif text == "/win":
                     stats = load_stats()
                     stats["wins"] += 1
                     save_stats(stats)
                     send_telegram(
                         f"WIN logged.\n"
-                        f"Record: {stats['wins']}W/{stats['losses']}L\n"
+                        f"Record: {stats['wins']}W / {stats['losses']}L\n"
                         f"Win Rate: {win_rate(stats)}%"
                     )
+
                 elif text == "/loss":
                     stats = load_stats()
                     stats["losses"] += 1
                     save_stats(stats)
                     send_telegram(
                         f"LOSS logged.\n"
-                        f"Record: {stats['wins']}W/{stats['losses']}L\n"
+                        f"Record: {stats['wins']}W / {stats['losses']}L\n"
                         f"Win Rate: {win_rate(stats)}%"
                     )
+
                 elif text == "/help":
                     send_telegram(
-                        "ALIEN PROTOCOL v5 COMMANDS\n"
+                        "ALIEN PROTOCOL v6 COMMANDS\n"
                         "─────────────────────\n"
-                        "/scan  — live scan + AI verdict\n"
+                        "/scan  — full scan + live odds\n"
+                        "/bets  — top 3 bet cards with AI\n"
+                        "/top   — single best bet card\n"
                         "/stats — win/loss record\n"
-                        "/top   — best signal + AI now\n"
                         "/win   — log a win\n"
                         "/loss  — log a loss\n"
                         "/help  — this menu\n"
                         "─────────────────────\n"
-                        "Auto: 6am briefing, hourly scans, 10pm results"
+                        "All markets are HIGHEST temperature.\n"
+                        "Never bet LOWEST temperature markets."
                     )
+
             time.sleep(2)
         except Exception as e:
             print(f"Command error: {e}")
@@ -605,7 +622,7 @@ def handle_commands():
 # ── SCHEDULER ────────────────────────────────────────────
 
 def scheduler():
-    print("Scheduler active — auto-scan every hour 7am-10pm UTC")
+    print("Scheduler active — hourly 7am-10pm UTC")
     while True:
         now = datetime.now(timezone.utc)
         hour, minute = now.hour, now.minute
@@ -625,16 +642,14 @@ def scheduler():
 
 def main():
     send_telegram(
-        "ALIEN PROTOCOL v5 ONLINE\n"
+        "ALIEN PROTOCOL v6 ONLINE\n"
         "─────────────────────\n"
         "Weather: Open-Meteo + Tomorrow.io + OpenWeatherMap\n"
-        "Odds: Live Polymarket API (auto-fetch)\n"
+        "Odds: Live Polymarket API (HIGHEST temp markets only)\n"
         "Brain: Groq AI Llama 3 70B\n"
         "Cities: 15 global markets\n"
-        "Schedule: 6am briefing, hourly scans, 10pm results\n"
         "─────────────────────\n"
-        "FULLY AUTONOMOUS. No manual updates needed.\n"
-        "Commands: /scan /stats /top /win /loss /help\n"
+        "Commands: /scan /bets /top /stats /win /loss /help\n"
         "─────────────────────\n"
         "Running first scan now..."
     )
@@ -645,3 +660,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
